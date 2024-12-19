@@ -1,0 +1,132 @@
+import openai
+from bs4 import BeautifulSoup
+import requests
+import json
+import os
+import time
+
+# Set up OpenAI API
+openai.api_key = "the_key_of_OpenAI";
+print(openai.__version__)
+
+def fetch_html(url):
+    """Fetches the HTML content of the webpage."""
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            return response.text
+        else:
+            print(f"Failed to fetch {url}, status code: {response.status_code}")
+            return None
+    except requests.RequestException as e:
+        print(f"Error fetching {url}: {e}")
+        return None
+
+def extract_text_from_tags(soup, tags):
+    """Extracts text from the specified tags."""
+    extracted_text = []
+    for tag in tags:
+        elements = soup.find_all(tag)
+        for elem in elements:
+            text = elem.get_text(strip=True)
+            if text:  # Only add non-empty text
+                extracted_text.append(text)
+    return extracted_text
+
+def dynamic_scraping(url):
+    """Dynamic scraping function."""
+    html_content = fetch_html(url)
+    if not html_content:
+        return None
+
+    soup = BeautifulSoup(html_content, 'html.parser')
+    
+    # Define possible tags for descriptions
+    possible_tags = ['h1', 'h2', 'h3', 'p', 'span', 'div']
+    extracted_text = extract_text_from_tags(soup, possible_tags)
+
+    # Post-process to get the longest or most relevant description
+    descriptions = sorted(extracted_text, key=len, reverse=True)
+
+    # Return top-n descriptions (you can customize this)
+    return descriptions[:5]  # Top 5 descriptions
+
+def query_openai_for_urls(user_input):
+    """Generates a list of relevant URLs using OpenAI."""
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a helpful assistant. When given a query, your task is to provide "
+                "a list of 5 relevant and trustworthy URLs related to the topic."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"The user wants information about: {user_input}. Provide 5 relevant URLs.",
+        },
+    ]
+
+    # Retry mechanism for handling rate limits
+    retries = 3
+    for attempt in range(retries):
+        try:
+            response = openai.ChatCompletion.create(
+                model="gpt-4o-mini",  
+                messages=messages,
+                max_tokens=150,
+            )
+            # Extract and process URLs from the response
+            urls = response.choices[0].message["content"].strip().split("\n")
+            return [url.strip() for url in urls if url.startswith("http")]
+        except openai.error.RateLimitError as e:
+            print(f"Rate limit reached: {e}. Retrying in {2**attempt} seconds...")
+            time.sleep(2**attempt)  # Exponential backoff
+        except openai.error.OpenAIError as e:
+            print(f"OpenAI API error: {e}")
+            break
+        except Exception as e:
+            print(f"Unexpected error: {e}")
+            break
+
+    return []
+
+def save_to_file(data, filename="scraped_results.json"):
+    """Saves the data to a JSON file."""
+    try:
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+        print(f"Results saved to '{filename}'")
+    except Exception as e:
+        print(f"Error saving results to file: {e}")
+
+def main():
+    user_input = input("Enter your query: ").strip()
+
+    if not user_input:
+        print("Query cannot be empty. Please try again.")
+        return
+
+    # Get relevant URLs from OpenAI
+    print("Fetching relevant URLs...")
+    urls = query_openai_for_urls(user_input)
+
+    if not urls:
+        print("No URLs found. Please try again.")
+        return
+
+    print("Scraping the URLs...")
+    results = {}
+    for url in urls:
+        print(f"Scraping URL: {url}")
+        descriptions = dynamic_scraping(url)
+        if descriptions:
+            results[url] = descriptions
+        else:
+            results[url] = ["No relevant content found."]
+
+    # Save the results to a file
+    save_to_file(results)
+
+if __name__ == "__main__":
+    main()
