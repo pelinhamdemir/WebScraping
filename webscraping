@@ -1,13 +1,12 @@
-import openai
-from bs4 import BeautifulSoup
 import requests
+from bs4 import BeautifulSoup
 import json
-import os
 import time
+from scholarly import scholarly
 
-# Set up OpenAI API
-openai.api_key = "the_key_of_OpenAI";
-print(openai.__version__)
+# Set up Google API key and Custom Search Engine ID
+GOOGLE_API_KEY = "AIzaSyDoNdJhVnL6GNQtF_Zvet_sJz_J9PGgfyI"
+CUSTOM_SEARCH_ENGINE_ID = "0107f730a66dc4720"
 
 def fetch_html(url):
     """Fetches the HTML content of the webpage."""
@@ -40,7 +39,7 @@ def dynamic_scraping(url):
         return None
 
     soup = BeautifulSoup(html_content, 'html.parser')
-    
+
     # Define possible tags for descriptions
     possible_tags = ['h1', 'h2', 'h3', 'p', 'span', 'div']
     extracted_text = extract_text_from_tags(soup, possible_tags)
@@ -51,45 +50,29 @@ def dynamic_scraping(url):
     # Return top-n descriptions (you can customize this)
     return descriptions[:5]  # Top 5 descriptions
 
-def query_openai_for_urls(user_input):
-    """Generates a list of relevant URLs using OpenAI."""
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are a helpful assistant. When given a query, your task is to provide "
-                "a list of 5 relevant and trustworthy URLs related to the topic."
-            ),
-        },
-        {
-            "role": "user",
-            "content": f"The user wants information about: {user_input}. Provide 5 relevant URLs.",
-        },
-    ]
+def query_google_for_urls(user_input):
+    """Generates a list of relevant URLs using Google Custom Search API."""
+    search_url = "https://www.googleapis.com/customsearch/v1"
+    params = {
+        "key": GOOGLE_API_KEY,
+        "cx": CUSTOM_SEARCH_ENGINE_ID,
+        "q": user_input,
+    }
 
-    # Retry mechanism for handling rate limits
-    retries = 3
-    for attempt in range(retries):
-        try:
-            response = openai.ChatCompletion.create(
-                model="gpt-4o-mini",  
-                messages=messages,
-                max_tokens=150,
-            )
-            # Extract and process URLs from the response
-            urls = response.choices[0].message["content"].strip().split("\n")
-            return [url.strip() for url in urls if url.startswith("http")]
-        except openai.error.RateLimitError as e:
-            print(f"Rate limit reached: {e}. Retrying in {2**attempt} seconds...")
-            time.sleep(2**attempt)  # Exponential backoff
-        except openai.error.OpenAIError as e:
-            print(f"OpenAI API error: {e}")
-            break
-        except Exception as e:
-            print(f"Unexpected error: {e}")
-            break
+    try:
+        response = requests.get(search_url, params=params)
+        response.raise_for_status()
+        data = response.json()
 
-    return []
+        # Extract URLs from the search results
+        urls = [item["link"] for item in data.get("items", [])]
+        return urls
+    except requests.RequestException as e:
+        print(f"Error querying Google API: {e}")
+        return []
+    except KeyError:
+        print("Unexpected response format from Google API.")
+        return []
 
 def save_to_file(data, filename="scraped_results.json"):
     """Saves the data to a JSON file."""
@@ -100,6 +83,41 @@ def save_to_file(data, filename="scraped_results.json"):
     except Exception as e:
         print(f"Error saving results to file: {e}")
 
+def query_google_scholar(query):
+    """Fetch academic reports using scholarly library."""
+    try:
+        search_results = scholarly.search_pubs(query)
+        reports = []
+
+        for result in search_results:
+            # Extract relevant fields
+            report = {
+                "title": result['bib'].get('title', 'No title'),
+                "authors": result['bib'].get('author', 'No authors'),
+                "abstract": result['bib'].get('abstract', 'No abstract'),
+                "year": result['bib'].get('pub_year', 'No year'),
+                "url": result.get('eprint_url', 'No URL'),
+            }
+            reports.append(report)
+
+            # Stop after collecting 10 results
+            if len(reports) >= 10:
+                break
+
+        return reports
+    except Exception as e:
+        print(f"Error fetching Google Scholar data: {e}")
+        return []
+
+def save_reports_to_file(reports, filename="academic_reports.json"):
+    """Save academic reports to a JSON file."""
+    try:
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(reports, f, ensure_ascii=False, indent=4)
+        print(f"Academic reports saved to '{filename}'")
+    except Exception as e:
+        print(f"Error saving academic reports to file: {e}")
+
 def main():
     user_input = input("Enter your query: ").strip()
 
@@ -107,14 +125,15 @@ def main():
         print("Query cannot be empty. Please try again.")
         return
 
-    # Get relevant URLs from OpenAI
+    # Fetch relevant URLs using the existing method
     print("Fetching relevant URLs...")
-    urls = query_openai_for_urls(user_input)
+    urls = query_google_for_urls(user_input)
 
     if not urls:
         print("No URLs found. Please try again.")
         return
 
+    # Scraping the URLs
     print("Scraping the URLs...")
     results = {}
     for url in urls:
@@ -125,8 +144,16 @@ def main():
         else:
             results[url] = ["No relevant content found."]
 
-    # Save the results to a file
-    save_to_file(results)
+    # Save scraped data to a file
+    save_to_file(results, filename="web_scraped_results.json")
+
+    # Fetch academic reports
+    print("Fetching academic reports...")
+    academic_reports = query_google_scholar(user_input)
+    if academic_reports:
+        save_reports_to_file(academic_reports)
+    else:
+        print("No academic reports found.")
 
 if __name__ == "__main__":
     main()
