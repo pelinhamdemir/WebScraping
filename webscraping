@@ -5,8 +5,8 @@ import time
 from scholarly import scholarly
 
 # Set up Google API key and Custom Search Engine ID
-GOOGLE_API_KEY = "AIzaSyDoNdJhVnL6GNQtF_Zvet_sJz_J9PGgfyI"
-CUSTOM_SEARCH_ENGINE_ID = "0107f730a66dc4720"
+GOOGLE_API_KEY = "the_key"
+CUSTOM_SEARCH_ENGINE_ID = "the_ID"
 
 def fetch_html(url):
     """Fetches the HTML content of the webpage."""
